@@ -32,4 +32,21 @@ void SPI_SEND(char data)
     while (!(SPSR & (1 << SPIF)));// wait until done transmitting
 }
 
+void SPI_SEND_COL(unsigned char col, unsigned char data)
+{
+    PORTB &= ~(1 << PIN_SS); // Set SS low
+    SPI_SEND(col);
+    SPI_SEND(data);
+    PORTB |= (1 << PIN_SS); // Set SS high
+}
+
+void MAX7219_init()
+{
+    SPI_SEND_COL(0x09, 0x00); // Decode mode: no decode for any digit
+    SPI_SEND_COL(0x0A, 0x0F); // Intensity: set to maximum (0x00 to 0x0F)
+    SPI_SEND_COL(0x0B, 0x07); // Scan limit: display all rows/digits
+    SPI_SEND_COL(0x0C, 0x01); // Shutdown register: normal operation
+    SPI_SEND_COL(0x0F, 0x00); // Display test: off
+}
+
 #endif /* SPIAVR_H */
