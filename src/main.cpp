@@ -158,7 +158,6 @@ bool comparePositions(SnakeElement *pos1, SnakeElement *pos2)
 
 struct SnakeElement generateFood(struct List *snakeList)
 {
-  serial_println("generate");
   struct SnakeElement food;
   bool isValidPosition = 0;
 
@@ -268,7 +267,7 @@ int TickMatrix(int state)
       }
       else if (currentDirection == Down)
       {
-        currentPos.row = (currentPos.row - 1) % 8;
+        currentPos.row = (currentPos.row - 1 + 8) % 8;
         addSnakeHead(&snakeList, currentPos.col, currentPos.row);
       }
       else if (currentDirection == Right)
@@ -278,7 +277,7 @@ int TickMatrix(int state)
       }
       else if (currentDirection == Left)
       {
-        currentPos.col = (currentPos.col - 1) % 8;
+        currentPos.col = (currentPos.col - 1 + 8) % 8;
         addSnakeHead(&snakeList, currentPos.col, currentPos.row);
       }
 
@@ -296,6 +295,7 @@ int TickMatrix(int state)
       {
         resetSnake(&snakeList);
         addSnakeHead(&snakeList, 4, 4);
+        currentPos = {4, 4};
         food = generateFood(&snakeList);
         currentDirection = Up;
         score = 0;
@@ -478,6 +478,8 @@ int main(void)
   currentPos = {4, 4};
   score = 0;
   running = 0;
+  food = generateFood(&snakeList);
+
 
   // Tasks init
   tasks[0].state = Matrix_Init;
@@ -490,10 +492,14 @@ int main(void)
   tasks[1].period = TASK1_PERIOD;
   tasks[1].TickFct = &Tick_JS;
 
+
   TimerSet(GCD_PERIOD);
   TimerOn();
 
-  while (1){}
+  while (1)
+  {
+
+  }
 
   return 0;
 }
