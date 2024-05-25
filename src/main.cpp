@@ -16,8 +16,9 @@
 #include "serialATmega.h"
 #include "spiAVR.h"
 #include "time.h"
+#include "LCD.h"
 
-#define NUM_TASKS 2
+#define NUM_TASKS 3
 
 // Task struct for concurrent synchSMs implmentations
 typedef struct _task
@@ -32,6 +33,7 @@ typedef struct _task
 const unsigned long GCD_PERIOD = 25;   // GCD of all tasks
 const unsigned int TASK0_PERIOD = 500;  // Matrix task
 const unsigned int TASK1_PERIOD = 25;  // Joystick input task
+const unsigned int TASK2_PERIOD = 100;  // LCD display task
 
 task tasks[NUM_TASKS]; // declared task array with 5 tasks
 
@@ -208,6 +210,38 @@ void resetSnake(struct List *snakeList)
   }
 }
 
+void num_to_str(unsigned char number, char *str)
+{
+  int i = 0;
+
+  if (number == 0)
+  {
+    str[i++] = '0';
+  }
+  else
+  {
+    while (number != 0)
+    {
+      str[i++] = (number % 10) + '0';
+      number /= 10;
+    }
+  }
+
+  str[i] = '\0';
+  int start = 0;
+  int end = i - 1;
+  char temp;
+  while (start < end)
+  {
+    // Swap characters
+    temp = str[start];
+    str[start] = str[end];
+    str[end] = temp;
+    start++;
+    end--;
+  }
+}
+
 // Global variables
 struct List snakeList = {NULL, NULL}; // Initialize snakeList
 enum direction {Up, Down, Right, Left} currentDirection; 
@@ -215,6 +249,7 @@ struct SnakeElement currentPos;
 struct SnakeElement food;
 int score;
 bool running;
+bool gameOver;
 
 enum MatrixStates
 {
@@ -297,6 +332,7 @@ int TickMatrix(int state)
         currentDirection = Up;
         score = 0;
         running = 0;
+        gameOver = 1;
       }
 
       resetMatrix();
@@ -441,6 +477,117 @@ int Tick_JS(int state)
   return state;
 }
 
+enum LCDStates {LCD_Init, LCD_NewGame, LCD_InGame, LCD_Pause, LCD_GameOver};
+int TickLCD(int state)
+{
+  static int lastScore;
+
+  switch (state)  // State transitions
+  {
+    case LCD_Init:
+      lastScore = score;
+      lcd_clear();
+      lcd_goto_xy(0, 0);
+      lcd_write_str("New Game");
+      lcd_goto_xy(1, 0);
+      lcd_write_str("Press JS");
+      state = LCD_NewGame;
+      break;
+
+    case LCD_NewGame:
+      if(running)
+      {
+        lastScore = score;
+        lcd_clear();
+        lcd_goto_xy(0, 0);
+        lcd_write_str("Score: ");
+        lcd_goto_xy(0, 7);
+        char str[4];
+        num_to_str(score, str);
+        lcd_write_str(str);
+        lcd_goto_xy(1, 0);
+        lcd_write_str("Press JS");
+        state = LCD_InGame;
+      }
+      break;
+
+    case LCD_InGame:
+      if(gameOver)
+      {
+        lcd_clear();
+        lcd_goto_xy(0, 0);
+        lcd_write_str("Game Over");
+        lcd_goto_xy(1, 0);
+        lcd_write_str("Press JS");
+        state = LCD_GameOver;
+      } 
+      else if (!running)
+      {
+        lcd_clear();
+        lcd_goto_xy(0, 0);
+        lcd_write_str("Game Paused");
+        lcd_goto_xy(1, 0);
+        lcd_write_str("Press JS");
+        state = LCD_Pause;
+      }
+      break;
+
+    case LCD_Pause:
+      if (!running)
+      {
+        state = LCD_InGame;
+      }
+      break;
+
+    case LCD_GameOver:
+      if(running)
+      {
+        gameOver = 0;
+        state = LCD_InGame;
+      }
+      break;
+
+    default:
+      state = LCD_Init;
+      break;
+  }
+
+  switch (state)  // State actions
+  {
+  case LCD_Init:
+    break;
+
+  case LCD_NewGame:
+    break;
+
+  case LCD_InGame:
+    if(lastScore != score)
+    {
+      lastScore = score;
+      lcd_clear();
+      lcd_goto_xy(0, 0);
+      lcd_write_str("Score: ");
+      lcd_goto_xy(0, 7);
+      char str[4];
+      num_to_str(score, str);
+      lcd_write_str(str);
+      lcd_goto_xy(1, 0);
+      lcd_write_str("Press JS");
+    }
+    break;
+
+  case LCD_Pause:
+    break;
+
+  LCD_GameOver:
+    break;
+
+  default:
+    break;
+  }
+  return state;
+}
+
 void hardwareInit()
 {
   // OUTPUT (DDR) => 1
@@ -462,6 +609,7 @@ void hardwareInit()
   MAX7219_init();
   resetMatrix();
 
+  lcd_init();
   ADC_init();
   serial_init(9600);
 }
@@ -479,6 +627,7 @@ int main(void)
   currentPos = {3, 3};
   score = 0;
   running = 0;
+  gameOver = 0;
   food = generateFood(&snakeList);
   renderSnake(&snakeList, &food);
 
@@ -494,6 +643,10 @@ int main(void)
   tasks[1].period = TASK1_PERIOD;
   tasks[1].TickFct = &Tick_JS;
 
+  tasks[2].state = LCD_Init;
+  tasks[2].elapsedTime = 0;
+  tasks[2].period = TASK2_PERIOD;
+  tasks[2].TickFct = &TickLCD;
 
   TimerSet(GCD_PERIOD);
   TimerOn();
