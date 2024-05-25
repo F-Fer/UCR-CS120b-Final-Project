@@ -161,9 +161,6 @@ struct SnakeElement generateFood(struct List *snakeList)
   struct SnakeElement food;
   bool isValidPosition = 0;
 
-  // Seed the random number generator
-  srand(time(NULL));
-
   while (!isValidPosition)
   {
     // Generate random position
@@ -294,8 +291,8 @@ int TickMatrix(int state)
       if(checkCollision(&snakeList, &currentPos))
       {
         resetSnake(&snakeList);
-        addSnakeHead(&snakeList, 4, 4);
-        currentPos = {4, 4};
+        addSnakeHead(&snakeList, 3, 3);
+        currentPos = {3, 3};
         food = generateFood(&snakeList);
         currentDirection = Up;
         score = 0;
@@ -406,28 +403,28 @@ int Tick_JS(int state)
     break;
 
   case UpPressed:
-    if(currentDirection == Left || currentDirection == Right)
+    if((currentDirection == Left || currentDirection == Right) && running)
     {
       currentDirection = Up;
     }
     break;
 
   case DownPressed:
-    if (currentDirection == Left || currentDirection == Right)
+    if ((currentDirection == Left || currentDirection == Right) && running)
     {
       currentDirection = Down;
     }
     break;
 
   case RightPressed:
-    if (currentDirection == Up || currentDirection == Down)
+    if ((currentDirection == Up || currentDirection == Down) && running)
     {
       currentDirection = Right;
     }
     break;
 
   case LeftPressed:
-    if (currentDirection == Up || currentDirection == Down)
+    if ((currentDirection == Up || currentDirection == Down) && running)
     {
       currentDirection = Left;
     }
@@ -473,12 +470,17 @@ int main(void)
 {
   hardwareInit();
 
+  // Seed the random number generator
+  srand(time(NULL));
+
+  // Set global variables
   currentDirection = Up;
-  addSnakeHead(&snakeList, 4, 4);
-  currentPos = {4, 4};
+  addSnakeHead(&snakeList, 3, 3);
+  currentPos = {3, 3};
   score = 0;
   running = 0;
   food = generateFood(&snakeList);
+  renderSnake(&snakeList, &food);
 
 
   // Tasks init
@@ -496,10 +498,6 @@ int main(void)
   TimerSet(GCD_PERIOD);
   TimerOn();
 
-  while (1)
-  {
-
-  }
-
+  while (1){}
   return 0;
 }
