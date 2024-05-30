@@ -17,8 +17,10 @@
 #include "spiAVR.h"
 #include "time.h"
 #include "LCD.h"
+#include <avr/eeprom.h>
 
-#define NUM_TASKS 3
+#define NUM_TASKS 4
+#define EEPROM_ADDRESS 0
 
 // Task struct for concurrent synchSMs implmentations
 typedef struct _task
@@ -34,6 +36,7 @@ const unsigned long GCD_PERIOD = 25;   // GCD of all tasks
 const unsigned int TASK0_PERIOD = 500;  // Matrix task
 const unsigned int TASK1_PERIOD = 25;  // Joystick input task
 const unsigned int TASK2_PERIOD = 100;  // LCD display task
+const unsigned int TASK3_PERIOD = 50;  // Highscore reset button task
 
 task tasks[NUM_TASKS]; // declared task array with 5 tasks
 
@@ -122,6 +125,17 @@ int listLen(struct List *snakeList)
   }
   return count;
 }
+
+
+// Global variables
+struct List snakeList = {NULL, NULL}; // Initialize snakeList
+enum direction {Up, Down, Right, Left} currentDirection; 
+struct SnakeElement currentPos;
+struct SnakeElement food;
+int score;
+int highscore;
+bool running;
+bool gameOver;
 
 
 // Helper Functions
@@ -242,14 +256,25 @@ void num_to_str(unsigned char number, char *str)
   }
 }
 
-// Global variables
-struct List snakeList = {NULL, NULL}; // Initialize snakeList
-enum direction {Up, Down, Right, Left} currentDirection; 
-struct SnakeElement currentPos;
-struct SnakeElement food;
-int score;
-bool running;
-bool gameOver;
+void printHighscoreOnLCD(unsigned char row)
+{
+  lcd_goto_xy(row, 0);
+  lcd_write_str("Highscore:");
+  lcd_goto_xy(row, 11);
+  char str[4];
+  num_to_str(highscore, str);
+  lcd_write_str(str);
+}
+
+void printScoreOnLCD(unsigned char row)
+{
+  lcd_goto_xy(row, 0);
+  lcd_write_str("Score:");
+  lcd_goto_xy(row, 7);
+  char str[4];
+  num_to_str(score, str);
+  lcd_write_str(str);
+}
 
 enum MatrixStates
 {
@@ -330,7 +355,12 @@ int TickMatrix(int state)
         currentPos = {3, 3};
         food = generateFood(&snakeList);
         currentDirection = Up;
+        if (score > highscore)
+        {
+          highscore = score;
+        }
         score = 0;
+        eeprom_update_word((uint16_t *)EEPROM_ADDRESS, highscore);
         running = 0;
         gameOver = 1;
       }
@@ -489,8 +519,7 @@ int TickLCD(int state)
       lcd_clear();
       lcd_goto_xy(0, 0);
       lcd_write_str("New Game");
-      lcd_goto_xy(1, 0);
-      lcd_write_str("Press JS");
+      printHighscoreOnLCD(1);
       state = LCD_NewGame;
       break;
 
@@ -499,12 +528,7 @@ int TickLCD(int state)
       {
         lastScore = score;
         lcd_clear();
-        lcd_goto_xy(0, 0);
-        lcd_write_str("Score: ");
-        lcd_goto_xy(0, 7);
-        char str[4];
-        num_to_str(score, str);
-        lcd_write_str(str);
+        printScoreOnLCD(0);
         lcd_goto_xy(1, 0);
         lcd_write_str("Press JS");
         state = LCD_InGame;
@@ -517,8 +541,7 @@ int TickLCD(int state)
         lcd_clear();
         lcd_goto_xy(0, 0);
         lcd_write_str("Game Over");
-        lcd_goto_xy(1, 0);
-        lcd_write_str("Press JS");
+        printHighscoreOnLCD(1);
         state = LCD_GameOver;
       } 
       else if (!running)
@@ -526,15 +549,18 @@ int TickLCD(int state)
         lcd_clear();
         lcd_goto_xy(0, 0);
         lcd_write_str("Game Paused");
-        lcd_goto_xy(1, 0);
-        lcd_write_str("Press JS");
+        printHighscoreOnLCD(1);
         state = LCD_Pause;
       }
       break;
 
     case LCD_Pause:
-      if (!running)
+      if (running)
       {
+        lcd_clear();
+        printScoreOnLCD(0);
+        lcd_goto_xy(1, 0);
+        lcd_write_str("Press JS");
         state = LCD_InGame;
       }
       break;
@@ -565,12 +591,7 @@ int TickLCD(int state)
     {
       lastScore = score;
       lcd_clear();
-      lcd_goto_xy(0, 0);
-      lcd_write_str("Score: ");
-      lcd_goto_xy(0, 7);
-      char str[4];
-      num_to_str(score, str);
-      lcd_write_str(str);
+      printScoreOnLCD(0);
       lcd_goto_xy(1, 0);
       lcd_write_str("Press JS");
     }
@@ -585,6 +606,56 @@ int TickLCD(int state)
   default:
     break;
   }
+  return state;
+}
+
+enum HSResetStates {HS_Init, HS_Wait, HS_Pressed};
+int Tick_HS(int state)
+{
+  bool btn_pressed = GetBit(PINC, 3);
+  switch (state)  // State transitions
+  {
+  case HS_Init:
+    state = HS_Wait;
+    break;
+  
+  case HS_Wait:
+    if(btn_pressed)
+    {
+      highscore = 0;
+      eeprom_update_dword((uint32_t *)EEPROM_ADDRESS, highscore);
+      state = HS_Pressed;
+    }
+    break;
+
+  case HS_Pressed:
+    if(!btn_pressed)
+    {
+      state = HS_Wait;
+    }
+    break;
+
+  default:
+    state = HS_Init;
+    break;
+  }
+
+  switch (state)  // State actions
+  {
+  case HS_Init:
+    break;
+
+  case HS_Wait:
+    break;
+
+  case HS_Pressed:
+    break;
+
+  default:
+    state = HS_Init;
+    break;
+  }
+
   return state;
 }
 
@@ -626,6 +697,7 @@ int main(void)
   addSnakeHead(&snakeList, 3, 3);
   currentPos = {3, 3};
   score = 0;
+  highscore = eeprom_read_word((uint16_t *)EEPROM_ADDRESS);
   running = 0;
   gameOver = 0;
   food = generateFood(&snakeList);
@@ -647,6 +719,11 @@ int main(void)
   tasks[2].elapsedTime = 0;
   tasks[2].period = TASK2_PERIOD;
   tasks[2].TickFct = &TickLCD;
+
+  tasks[3].state = HS_Init;
+  tasks[3].elapsedTime = 0;
+  tasks[3].period = TASK3_PERIOD;
+  tasks[3].TickFct = &Tick_HS;
 
   TimerSet(GCD_PERIOD);
   TimerOn();
