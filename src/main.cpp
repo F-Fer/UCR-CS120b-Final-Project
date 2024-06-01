@@ -5,8 +5,8 @@
  * I acknowledge all content contained herein, excluding
  * template or example code, is my own original work.
  *
- * DemoLink: https://youtu.be/UlxSbMa9vg0
- */
+ * DemoLink: https://youtu.be/PIpjYblfRpQ
+*/
 
 #include <stdlib.h> 
 #include <stddef.h> 
@@ -19,8 +19,10 @@
 #include "LCD.h"
 #include <avr/eeprom.h>
 
-#define NUM_TASKS 4
+#define NUM_TASKS 6
 #define EEPROM_ADDRESS 0
+#define GAME_OVER_TONE 500 // Frequency in Hz for game over
+#define EAT_TONE 1000      // Frequency in Hz for eating element
 
 // Task struct for concurrent synchSMs implmentations
 typedef struct _task
@@ -32,11 +34,13 @@ typedef struct _task
 } task;
 
 // Periods
-const unsigned long GCD_PERIOD = 25;   // GCD of all tasks
+const unsigned long GCD_PERIOD = 25;    // GCD of all tasks
 const unsigned int TASK0_PERIOD = 500;  // Matrix task
-const unsigned int TASK1_PERIOD = 25;  // Joystick input task
+const unsigned int TASK1_PERIOD = 25;   // Joystick input task
 const unsigned int TASK2_PERIOD = 100;  // LCD display task
-const unsigned int TASK3_PERIOD = 50;  // Highscore reset button task
+const unsigned int TASK3_PERIOD = 200;   // Highscore reset button task
+const unsigned int TASK4_PERIOD = 50;  // Buzzer task
+const unsigned int TASK5_PERIOD = 25;   // Eat sound task
 
 task tasks[NUM_TASKS]; // declared task array with 5 tasks
 
@@ -136,6 +140,9 @@ int score;
 int highscore;
 bool running;
 bool gameOver;
+bool eatSound;
+bool buzzerInUse;
+int prescaler;
 
 
 // Helper Functions
@@ -276,6 +283,23 @@ void printScoreOnLCD(unsigned char row)
   lcd_write_str(str);
 }
 
+void set_buzzer_frequency(uint16_t frequency)
+{
+  uint16_t ocr_value = (F_CPU / (2 * 64 * frequency)) - 1;
+  OCR1A = ocr_value;
+}
+
+void buzzer_on()
+{
+  TCCR1A |= (1 << COM1A0); // Enable PWM on OC1A (PB1)
+}
+
+void buzzer_off()
+{
+  TCCR1A &= ~(1 << COM1A0); // Disable PWM on OC1A (PB1)
+}
+
+
 enum MatrixStates
 {
   Matrix_Init,
@@ -341,6 +365,7 @@ int TickMatrix(int state)
       // Check if snake has eaten food
       if(comparePositions(&currentPos, &food))
       {
+        eatSound = 1;
         score += 1;
         food = generateFood(&snakeList);
       } else {
@@ -612,16 +637,19 @@ int TickLCD(int state)
 enum HSResetStates {HS_Init, HS_Wait, HS_Pressed};
 int Tick_HS(int state)
 {
+  static int i;
   bool btn_pressed = GetBit(PINC, 3);
   switch (state)  // State transitions
   {
   case HS_Init:
+    i = 0;
     state = HS_Wait;
     break;
   
   case HS_Wait:
     if(btn_pressed)
     {
+      i = 0;
       highscore = 0;
       eeprom_update_dword((uint32_t *)EEPROM_ADDRESS, highscore);
       state = HS_Pressed;
@@ -629,7 +657,7 @@ int Tick_HS(int state)
     break;
 
   case HS_Pressed:
-    if(!btn_pressed)
+    if(!btn_pressed && i > 20)
     {
       state = HS_Wait;
     }
@@ -646,14 +674,117 @@ int Tick_HS(int state)
     break;
 
   case HS_Wait:
+    PORTB = SetBit(PORTD, 0, 0);
     break;
 
   case HS_Pressed:
+    if (i % 2)
+    {
+      PORTB = SetBit(PORTD, 0, 1);
+    }
+    else 
+    {
+      PORTB = SetBit(PORTD, 0, 0);
+    }
+    i++;
     break;
 
   default:
     state = HS_Init;
     break;
+  }
+
+  return state;
+}
+
+enum BuzzerStates{Buzzer_Init, Buzzer_Wait};
+int TickBuzzer(int state)
+{
+  switch (state)
+  { // State transitions
+  case Buzzer_Init:
+    state = Buzzer_Wait;
+    break;
+
+  case Buzzer_Wait:
+    break;
+
+  default:
+    break;
+  }
+
+  switch (state)
+  { // State actions
+  case Buzzer_Wait:
+    if (buzzerInUse && prescaler > 0)
+    {
+      // Clear current prescaler settings and configure Timer1 for PWM on OC1A (B1)
+      TCCR1A = (1 << COM1A0) | (1 << WGM10); // Toggle OC1A on compare match, Fast PWM 8-bit
+      TCCR1B = (1 << WGM12) | prescaler;     // Fast PWM, prescaler set dynamically
+    }
+    else
+    {
+      // Turn off the buzzer by disabling the Timer1 clock
+      TCCR1B &= ~(1 << CS12 | 1 << CS11 | 1 << CS10);
+    }
+    break;
+
+  default:
+    break;
+  }
+
+  return state;
+}
+
+enum EatSoundStates {EatSound_Init, EatSound_Off, EatSound_On};
+int TickEatSound(int state)
+{
+  static int i;
+  switch (state)  // State transitions
+  {
+    case EatSound_Init:
+      state = EatSound_Off;
+      break;
+
+    case EatSound_Off:
+      if (eatSound)
+      {
+        buzzerInUse = 1; 
+        prescaler = 64;
+        i = 0;
+        eatSound = 0;
+        state = EatSound_On;
+      }
+      break;
+
+    case EatSound_On:
+      if (i > 10)
+      {
+        buzzerInUse = 0;
+        state = EatSound_Off;
+      }
+      break;
+    
+    default:
+      state = EatSound_Init;
+      break;
+  }
+
+  switch (state)
+  {
+    case EatSound_Init:
+      break;
+
+    case EatSound_Off:
+      break;
+
+    case EatSound_On:
+      i++;
+      break;
+
+    default:
+      state = EatSound_Init;
+      break;
   }
 
   return state;
@@ -674,6 +805,17 @@ void hardwareInit()
   // All of D as output
   DDRD = 0xFF;
   PORTD = 0x00;
+
+  // Buzzer init
+  // Set Timer1 to Fast PWM mode with a prescaler of 64
+  // Set waveform generation mode to Fast PWM, 8-bit (WGM12, WGM10)
+  TCCR1A |= (1 << WGM10);
+  TCCR1B |= (1 << WGM12);
+
+  // Set non-inverting mode for OC1A (clear on compare match, set at BOTTOM)
+  TCCR1A |= (1 << COM1A1);
+  // Set duty cycle to 50% (128 out of 256)
+  OCR1A = 128;
 
   SPI_INIT();
 
@@ -702,6 +844,8 @@ int main(void)
   gameOver = 0;
   food = generateFood(&snakeList);
   renderSnake(&snakeList, &food);
+  buzzerInUse = 0;
+  prescaler = 64;
 
 
   // Tasks init
@@ -724,6 +868,16 @@ int main(void)
   tasks[3].elapsedTime = 0;
   tasks[3].period = TASK3_PERIOD;
   tasks[3].TickFct = &Tick_HS;
+
+  tasks[4].state = Buzzer_Init;
+  tasks[4].elapsedTime = 0;
+  tasks[4].period = TASK4_PERIOD;
+  tasks[4].TickFct = &TickBuzzer;
+
+  tasks[5].state = EatSound_Init;
+  tasks[5].elapsedTime = 0;
+  tasks[5].period = TASK5_PERIOD;
+  tasks[5].TickFct = &TickEatSound;
 
   TimerSet(GCD_PERIOD);
   TimerOn();
