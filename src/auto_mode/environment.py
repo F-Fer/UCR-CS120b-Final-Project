@@ -32,7 +32,7 @@ class SnakeGame(gym.Env):
     MAX_STEPS_AFTER_FOOD = 200
 
     def __init__(self, grid_size=8):
-        super(self).__init__()
+        super().__init__()
         self.stepnum = 0
         self.last_food_step = 0
 
@@ -41,13 +41,15 @@ class SnakeGame(gym.Env):
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.uint8) + self.EMPTY
         self.snake_coordinates = [(3, 3)]
         self.snake_direction = self.UP
+        for coord in self.snake_coordinates:
+          self.grid[coord] = self.SNAKE_BODY
         self.grid[self.snake_coordinates[-1]] = self.SNAKE_HEAD
 
         # Add food
         self.food = (np.random.randint(grid_size), np.random.randint(grid_size))
-        while (self.grid[food] != 0):
+        while (self.grid[self.food] != 0):
             self.food = (np.random.randint(grid_size), np.random.randint(grid_size))
-        self.grid[food] = self.FOOD
+        self.grid[self.food] = self.FOOD
         self.dist_to_food = self.grid_distance(self.snake_coordinates[-1], self.food)
 
         self.init_grid = self.grid.copy()
@@ -57,18 +59,19 @@ class SnakeGame(gym.Env):
 
         self.observation_space = spaces.Dict(
             spaces={
-                "position": spaces.Box(low=0, high=self.grid_size, shape=(2,), dtype=np.int32),
-                "direction": spaces.Box(low=-1, high=1, shape=(2,), dtype=np.int32),
-                "gird": spaces.Box(low=0, high=3, shape=(self.grid_size, self.grid_size), dtype=np.uint8)
+                "direction": spaces.Box(low=0, high=3, shape=(1,), dtype=np.int32),
+                "grid": spaces.Box(low=0, high=3, shape=(self.grid_size, self.grid_size), dtype=np.uint8)
             }
         )
 
-    def get_obs(self):
+    def get_state(self):
+        scaled_grid = self.grid / 3.0  # Scale grid values to [0, 1]
+        scaled_direction = np.array([self.snake_direction / 3.0], dtype=np.float32)  # Scale direction to [0, 1]
         return {
-            "position": np.array(np.array(self.snake_coordinates[-1]), dtype=np.int32),
-            "direction": self.snake_direction,
-            "gird": self.gird
+            "direction": scaled_direction,
+            "grid": scaled_grid
         }
+
 
     def step(self, action):
         self.stepnum += 1
@@ -98,14 +101,14 @@ class SnakeGame(gym.Env):
         if new_head in self.snake_coordinates:
             reward = self.REWARD_HIT
             done = True
-            return self.get_obs(), reward, done, {}
+            return self.get_state(), reward, done, {}
 
         # Check if the snake has found food
         if new_head == self.food:
             reward = self.REWARD_PER_FOOD
             self.snake_coordinates.append(new_head)
-            self.grid[new_head] = self.SNAKE_HEAD
             self.grid[self.snake_coordinates[-2]] = self.SNAKE_BODY
+            self.grid[new_head] = self.SNAKE_HEAD
 
             # Check if snake takes up the entige screen
             if len(self.snake_coordinates) == (self.grid_size * self.grid_size):
@@ -119,12 +122,13 @@ class SnakeGame(gym.Env):
                 self.last_food_step = self.stepnum
         else:
             reward = self.REWAED_STEP_TOWARDS_FOOD
+            self.snake_coordinates.append(new_head)
+            self.grid[new_head] = self.SNAKE_HEAD
             tail = self.snake_coordinates.pop(0)
             self.grid[tail] = self.EMPTY
 
-            self.snake_coordinates.append(new_head)
-            self.grid[new_head] = self.SNAKE_HEAD
-            self.grid[self.snake_coordinates[-2]] = self.SNAKE_BODY
+            if len(self.snake_coordinates) > 1:
+              self.grid[self.snake_coordinates[-2]] = self.SNAKE_BODY
 
         # Check if maximum steps after finding food is reached
         if self.stepnum - self.last_food_step >= self.MAX_STEPS_AFTER_FOOD:
@@ -132,7 +136,7 @@ class SnakeGame(gym.Env):
         else:
             done = False
 
-        return self.get_obs(), reward, done, {}
+        return self.get_state(), reward, done, {}
 
 
     def reset(self, seed=None):
@@ -146,16 +150,16 @@ class SnakeGame(gym.Env):
         if seed is not None:
             np.random.seed(seed)
 
-        obs = self._get_obs()
+        state = self.get_state()
         info = {}
 
-        return obs, info
+        return state, info
 
     def grid_distance(self, pos1, pos2):
         return np.linalg.norm(np.array(pos1, dtype=np.float32)-np.array(pos2, dtype=np.float32))
 
     def snake_plot(self, plot_inline=False):
-        snake_ind = (self.gird == self.SNAKE_BODY)
+        snake_ind = (self.grid == self.SNAKE_BODY)
         food_ind = (self.grid == self.FOOD)
         head_ind = (self.grid == self.SNAKE_HEAD)
 
