@@ -19,10 +19,8 @@
 #include "LCD.h"
 #include <avr/eeprom.h>
 
-#define NUM_TASKS 6
+#define NUM_TASKS 7
 #define EEPROM_ADDRESS 0
-#define GAME_OVER_TONE 500 // Frequency in Hz for game over
-#define EAT_TONE 1000      // Frequency in Hz for eating element
 
 // Task struct for concurrent synchSMs implmentations
 typedef struct _task
@@ -39,8 +37,9 @@ const unsigned int TASK0_PERIOD = 500;  // Matrix task
 const unsigned int TASK1_PERIOD = 25;   // Joystick input task
 const unsigned int TASK2_PERIOD = 100;  // LCD display task
 const unsigned int TASK3_PERIOD = 200;   // Highscore reset button task
-const unsigned int TASK4_PERIOD = 50;  // Buzzer task
+const unsigned int TASK4_PERIOD = 25;  // Buzzer task
 const unsigned int TASK5_PERIOD = 25;   // Eat sound task
+const unsigned int TASK6_PERIOD = 25;   // Eat sound task
 
 task tasks[NUM_TASKS]; // declared task array with 5 tasks
 
@@ -142,7 +141,7 @@ bool running;
 bool gameOver;
 bool eatSound;
 bool buzzerInUse;
-int prescaler;
+int freqency;
 
 
 // Helper Functions
@@ -283,20 +282,56 @@ void printScoreOnLCD(unsigned char row)
   lcd_write_str(str);
 }
 
-void set_buzzer_frequency(uint16_t frequency)
+void setPrescaler(unsigned char ps)
 {
-  uint16_t ocr_value = (F_CPU / (2 * 64 * frequency)) - 1;
-  OCR1A = ocr_value;
+  // Clear the existing prescaler bits
+  TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10));
+
+  // Set the new prescaler value based on the input
+  switch (ps)
+  {
+  case 1:
+    TCCR1B |= (1 << CS10); // No prescaling
+    break;
+  case 8:
+    TCCR1B |= (1 << CS11); // Prescaler of 8
+    break;
+  case 64:
+    TCCR1B |= (1 << CS11) | (1 << CS10); // Prescaler of 64
+    break;
+  case 256:
+    TCCR1B |= (1 << CS12); // Prescaler of 256
+    break;
+  case 1024:
+    TCCR1B |= (1 << CS12) | (1 << CS10); // Prescaler of 1024
+    break;
+  default:
+    // Invalid prescaler value
+    TCCR1B |= (1 << CS10); // No prescaling
+    break;
+  }
 }
 
-void buzzer_on()
+void setFrequency(unsigned long frequency)
 {
-  TCCR1A |= (1 << COM1A0); // Enable PWM on OC1A (PB1)
+  unsigned long icrValue;
+  unsigned char prescaler = 64; // Default prescaler of 64
+  setPrescaler(prescaler);
+
+  // Calculate the ICR1 value for the desired frequency
+  icrValue = (16000000 / (prescaler * frequency)) - 1;
+
+  // Set the ICR1 register
+  ICR1 = icrValue;
+
+  // Set OCR1A for a 50% duty cycle
+  OCR1A = icrValue / 2;
 }
 
 void buzzer_off()
 {
-  TCCR1A &= ~(1 << COM1A0); // Disable PWM on OC1A (PB1)
+  // Turn off the buzzer by disabling the Timer1 clock
+  TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10)); 
 }
 
 
@@ -625,7 +660,7 @@ int TickLCD(int state)
   case LCD_Pause:
     break;
 
-  LCD_GameOver:
+  case LCD_GameOver:
     break;
 
   default:
@@ -716,16 +751,13 @@ int TickBuzzer(int state)
   switch (state)
   { // State actions
   case Buzzer_Wait:
-    if (buzzerInUse && prescaler > 0)
+    if (buzzerInUse && freqency > 0)
     {
-      // Clear current prescaler settings and configure Timer1 for PWM on OC1A (B1)
-      TCCR1A = (1 << COM1A0) | (1 << WGM10); // Toggle OC1A on compare match, Fast PWM 8-bit
-      TCCR1B = (1 << WGM12) | prescaler;     // Fast PWM, prescaler set dynamically
+      setFrequency(freqency);
     }
     else
     {
-      // Turn off the buzzer by disabling the Timer1 clock
-      TCCR1B &= ~(1 << CS12 | 1 << CS11 | 1 << CS10);
+      buzzer_off();
     }
     break;
 
@@ -750,7 +782,7 @@ int TickEatSound(int state)
       if (eatSound)
       {
         buzzerInUse = 1; 
-        prescaler = 64;
+        freqency = 300;
         i = 0;
         eatSound = 0;
         state = EatSound_On;
@@ -790,6 +822,94 @@ int TickEatSound(int state)
   return state;
 }
 
+enum GameOverSoundStates {GOSound_Init, GOSound_Off, GOSound1, GOSound2, GOSound3};
+int TickGameOverSound(int state)
+{
+  static int i;
+  static bool soundPlayed;
+
+  switch (state)  // State transitions
+  {
+    case GOSound_Init:
+      soundPlayed = 0;
+      state = GOSound_Off;
+      break;
+
+    case GOSound_Off:
+      if (gameOver)
+      {
+        if (!soundPlayed)
+        {
+          buzzerInUse = 1;
+          freqency = 1000;
+          i = 0;
+          state = GOSound1;
+        }
+      } 
+      else 
+      {
+        soundPlayed = 0;
+      }
+      break;
+
+    case GOSound1:
+      if(i > 45)
+      {
+        i = 0;
+        freqency = 500;
+        state = GOSound2;
+      }
+      break;
+
+    case GOSound2:
+      if (i > 30)
+      {
+        i = 0;
+        freqency = 200;
+        state = GOSound3;
+      }
+      break;
+
+    case GOSound3:
+      if (i > 30)
+      {
+        i = 0;
+        buzzerInUse = 0;
+        soundPlayed = 1;
+        state = GOSound_Off;
+      }
+      break;
+    
+    default:
+      state = GOSound_Init;
+      break;
+  }
+
+  switch (state)  // State actions
+  {
+    case GOSound_Off:
+      break;
+
+    case GOSound1:
+      i++;
+      break;
+
+    case GOSound2:
+      i++;
+      break;
+
+    case GOSound3:
+      i++;
+      break;
+
+    default:
+      state = GOSound_Init;
+      break;
+  }
+
+  return state;
+}
+
 void hardwareInit()
 {
   // OUTPUT (DDR) => 1
@@ -807,15 +927,21 @@ void hardwareInit()
   PORTD = 0x00;
 
   // Buzzer init
-  // Set Timer1 to Fast PWM mode with a prescaler of 64
-  // Set waveform generation mode to Fast PWM, 8-bit (WGM12, WGM10)
-  TCCR1A |= (1 << WGM10);
-  TCCR1B |= (1 << WGM12);
+  // Set Waveform Generation Mode to Fast PWM with ICR1 as TOP
+  TCCR1A |= (1 << WGM11);
+  TCCR1B |= (1 << WGM13) | (1 << WGM12);
 
-  // Set non-inverting mode for OC1A (clear on compare match, set at BOTTOM)
+  // Set Compare Output Mode to non-inverting mode on OC1A
   TCCR1A |= (1 << COM1A1);
-  // Set duty cycle to 50% (128 out of 256)
-  OCR1A = 128;
+
+  // Set ICR1 for a 50 Hz PWM frequency
+  ICR1 = 4999;
+
+  // Set OCR1A for a 50% duty cycle (ICR1 / 2)
+  OCR1A = 2499;
+
+  // Set prescaler to clk/64 and start the timer
+  TCCR1B |= (1 << CS11) | (1 << CS10);
 
   SPI_INIT();
 
@@ -845,7 +971,7 @@ int main(void)
   food = generateFood(&snakeList);
   renderSnake(&snakeList, &food);
   buzzerInUse = 0;
-  prescaler = 64;
+  freqency = 0;
 
 
   // Tasks init
@@ -878,6 +1004,11 @@ int main(void)
   tasks[5].elapsedTime = 0;
   tasks[5].period = TASK5_PERIOD;
   tasks[5].TickFct = &TickEatSound;
+
+  tasks[6].state = GOSound_Init;
+  tasks[6].elapsedTime = 0;
+  tasks[6].period = TASK6_PERIOD;
+  tasks[6].TickFct = &TickGameOverSound;
 
   TimerSet(GCD_PERIOD);
   TimerOn();
