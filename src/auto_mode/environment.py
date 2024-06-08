@@ -3,6 +3,11 @@ from gymnasium import spaces
 import gymnasium as gym
 import matplotlib.pyplot as plt
 
+import numpy as np
+from gymnasium import spaces
+import gymnasium as gym
+import matplotlib.pyplot as plt
+
 class SnakeGame(gym.Env):
 
     metadate = {"render.modes": ["console", "rgb_array"]}
@@ -23,13 +28,13 @@ class SnakeGame(gym.Env):
     EMPTY = 0
     SNAKE_BODY = 1
     SNAKE_HEAD = 2
-    FOOD = 4
+    FOOD = 3 # Used to be 4
 
     # Rewards
     REWARD_HIT = -20
-    REWAED_STEP_TOWARDS_FOOD = 1
+    REWARD_STEP_TOWARDS_FOOD = 1
     REWARD_PER_FOOD = 50
-    MAX_STEPS_AFTER_FOOD = 200
+    MAX_STEPS_AFTER_FOOD = 150
 
     def __init__(self, grid_size=8):
         super().__init__()
@@ -55,21 +60,23 @@ class SnakeGame(gym.Env):
         self.init_grid = self.grid.copy()
         self.init_snake_coordinates = self.snake_coordinates.copy()
 
-        self.actions_space = spaces.Discrete(self.n_actions)
+        self.action_space = spaces.Discrete(self.n_actions)
 
         self.observation_space = spaces.Dict(
             spaces={
+                "position": spaces.Box(low=0, high=(self.grid_size-1), shape=(2,), dtype=np.int32),
                 "direction": spaces.Box(low=0, high=3, shape=(1,), dtype=np.int32),
-                "grid": spaces.Box(low=0, high=3, shape=(self.grid_size, self.grid_size), dtype=np.uint8)
+                "grid": spaces.Box(low = 0, high = 3, shape = (self.grid_size, self.grid_size), dtype=np.uint8),
             }
         )
 
     def get_state(self):
-        scaled_grid = self.grid / 3.0  # Scale grid values to [0, 1]
-        scaled_direction = np.array([self.snake_direction / 3.0], dtype=np.float32)  # Scale direction to [0, 1]
+        # scaled_grid = self.grid #/ 3.0  # Scale grid values to [0, 1]
+        # scaled_direction = np.array([self.snake_direction], dtype=np.int32)  # Scale direction to [0, 1]
         return {
-            "direction": scaled_direction,
-            "grid": scaled_grid
+            "position": np.array(self.snake_coordinates[-1], dtype=np.int32),
+            "direction": np.array([self.snake_direction], dtype=np.int32),
+            "grid": self.grid
         }
 
 
@@ -101,7 +108,7 @@ class SnakeGame(gym.Env):
         if new_head in self.snake_coordinates:
             reward = self.REWARD_HIT
             done = True
-            return self.get_state(), reward, done, {}
+            return  self.get_state(), reward, done, False, {}
 
         # Check if the snake has found food
         if new_head == self.food:
@@ -121,7 +128,15 @@ class SnakeGame(gym.Env):
                 self.grid[self.food] = self.FOOD
                 self.last_food_step = self.stepnum
         else:
-            reward = self.REWAED_STEP_TOWARDS_FOOD
+            dist_to_food_prev = self.dist_to_food
+            self.dist_to_food = self.grid_distance(self.snake_coordinates[-1], self.food)
+            if dist_to_food_prev > self.dist_to_food:
+              reward += self.REWARD_STEP_TOWARDS_FOOD #reward for getting closer to food
+            elif dist_to_food_prev < self.dist_to_food:
+              reward -= self.REWARD_STEP_TOWARDS_FOOD #penalty for getting further
+            if ((self.stepnum - self.last_food_step) > self.MAX_STEPS_AFTER_FOOD):
+              done = True
+            self.stepnum += 1
             self.snake_coordinates.append(new_head)
             self.grid[new_head] = self.SNAKE_HEAD
             tail = self.snake_coordinates.pop(0)
@@ -130,13 +145,8 @@ class SnakeGame(gym.Env):
             if len(self.snake_coordinates) > 1:
               self.grid[self.snake_coordinates[-2]] = self.SNAKE_BODY
 
-        # Check if maximum steps after finding food is reached
-        if self.stepnum - self.last_food_step >= self.MAX_STEPS_AFTER_FOOD:
-            done = True
-        else:
-            done = False
-
-        return self.get_state(), reward, done, {}
+        # obs, reward, terminated, truncated, info
+        return  self.get_state(), reward, done, False, {}
 
 
     def reset(self, seed=None):
@@ -144,7 +154,7 @@ class SnakeGame(gym.Env):
         self.last_food_step = 0
         self.grid = self.init_grid.copy()
         self.snake_coordinates = self.init_snake_coordinates.copy()
-        
+
         self.dist_to_food = self.grid_distance(self.snake_coordinates[-1], self.food)
 
         if seed is not None:

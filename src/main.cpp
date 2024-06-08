@@ -19,8 +19,14 @@
 #include "LCD.h"
 #include <avr/eeprom.h>
 
-#define NUM_TASKS 7
+#define NUM_TASKS 9
 #define EEPROM_ADDRESS 0
+// Value representations for sending the snakes state via serial
+#define EMPTY 0
+#define SNAKE_BODY 1
+#define SNAKE_HEAD 2
+#define FOOD 3
+#define GRIDSIZE 8
 
 // Task struct for concurrent synchSMs implmentations
 typedef struct _task
@@ -39,7 +45,9 @@ const unsigned int TASK2_PERIOD = 100;  // LCD display task
 const unsigned int TASK3_PERIOD = 200;   // Highscore reset button task
 const unsigned int TASK4_PERIOD = 25;  // Buzzer task
 const unsigned int TASK5_PERIOD = 25;   // Eat sound task
-const unsigned int TASK6_PERIOD = 25;   // Eat sound task
+const unsigned int TASK6_PERIOD = 25;   // Game-Over Sound task
+const unsigned int TASK7_PERIOD = 100;   // Auto Mode Button
+const unsigned int TASK8_PERIOD = 250;   // Game-Over Sound task
 
 task tasks[NUM_TASKS]; // declared task array with 5 tasks
 
@@ -132,7 +140,7 @@ int listLen(struct List *snakeList)
 
 // Global variables
 struct List snakeList = {NULL, NULL}; // Initialize snakeList
-enum direction {Up, Down, Right, Left} currentDirection; 
+enum direction {Up, Right, Down, Left} currentDirection; 
 struct SnakeElement currentPos;
 struct SnakeElement food;
 int score;
@@ -142,6 +150,9 @@ bool gameOver;
 bool eatSound;
 bool buzzerInUse;
 int freqency;
+bool autoMode;
+bool querryModel;
+enum direction predictedDirection;
 
 
 // Helper Functions
@@ -334,12 +345,135 @@ void buzzer_off()
   TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10)); 
 }
 
+void renderSnakeToGrid(unsigned char grid[GRIDSIZE][GRIDSIZE], List *snake, SnakeElement *food)
+{
+  // Set all grid cells to EMPTY
+  for (int row = 0; row < 8; row++)
+  {
+    for (int col = 0; col < 8; col++)
+    {
+      grid[row][col] = EMPTY;
+    }
+  }
+
+  // Loop through the snake list and set the appropriate cells
+  ListNode *current = snake->head;
+  while (current != NULL)
+  {
+    grid[current->content.row][current->content.col] = SNAKE_BODY;
+    current = current->next;
+  }
+
+  // Set head of the snake
+  grid[currentPos.row][currentPos.col] = SNAKE_HEAD;
+
+  // Set the food element in the grid
+  grid[food->row][food->col] = FOOD;
+
+  return;
+}
+
+void prepareInput(unsigned char grid[GRIDSIZE][GRIDSIZE], int direction, unsigned char *input) // Input needs to be of size 65 (8 * 8 + 1) for the direction
+{
+  // Flatten the 8x8 grid into the input array
+  int index = 0;
+  for (int row = 0; row < 8; row++)
+  {
+    for (int col = 0; col < 8; col++)
+    {
+      input[index++] = grid[row][col];
+    }
+  }
+  // Add the direction to the input array
+  input[index] = (float)direction;
+}
+
+unsigned char getDirectionFromAction(unsigned char action)
+{
+  switch (action)
+  {
+    case 1:
+      return currentDirection;
+
+    case 0:
+      return (direction)((currentDirection + 1) % 4);
+
+    case 2:
+      return (direction)((currentDirection - 1) % 4);
+
+    default:
+      // Undefinded action
+      return currentDirection;
+      break;
+  }
+}
+
+void SnakeStep()
+{
+  // Tick snake
+  // Calculate new snake head position
+  if (currentDirection == Up)
+  {
+    currentPos.row = (currentPos.row + 1) % 8;
+    addSnakeHead(&snakeList, currentPos.col, currentPos.row);
+  }
+  else if (currentDirection == Down)
+  {
+    currentPos.row = (currentPos.row - 1 + 8) % 8;
+    addSnakeHead(&snakeList, currentPos.col, currentPos.row);
+  }
+  else if (currentDirection == Right)
+  {
+    currentPos.col = (currentPos.col + 1) % 8;
+    addSnakeHead(&snakeList, currentPos.col, currentPos.row);
+  }
+  else if (currentDirection == Left)
+  {
+    currentPos.col = (currentPos.col - 1 + 8) % 8;
+    addSnakeHead(&snakeList, currentPos.col, currentPos.row);
+  }
+
+  // Check if snake has eaten food
+  if (comparePositions(&currentPos, &food))
+  {
+    eatSound = 1;
+    score += 1;
+    food = generateFood(&snakeList);
+  }
+  else
+  {
+    removeSnakeTail(&snakeList);
+  }
+
+  // Check if snake has run into itself
+  if (checkCollision(&snakeList, &currentPos))
+  {
+    resetSnake(&snakeList);
+    addSnakeHead(&snakeList, 3, 3);
+    currentPos = {3, 3};
+    food = generateFood(&snakeList);
+    currentDirection = Up;
+    if (score > highscore)
+    {
+      highscore = score;
+    }
+    score = 0;
+    eeprom_update_word((uint16_t *)EEPROM_ADDRESS, highscore);
+    running = 0;
+    gameOver = 1;
+    autoMode = 0;
+  }
+
+  resetMatrix();
+  renderSnake(&snakeList, &food);
+}
 
 enum MatrixStates
 {
   Matrix_Init,
   Matrix_Running,
-  Marix_Stop
+  Matrix_Stop,
+  Matrix_Auto
 };
 
 int TickMatrix(int state)
@@ -347,20 +481,39 @@ int TickMatrix(int state)
   switch (state)  // State transitions
   {
   case Matrix_Init:
-    state = Marix_Stop;
+    state = Matrix_Stop;
     break;
 
-  case Marix_Stop:
+  case Matrix_Stop:
     if(running)
     {
-      state = Matrix_Running;
+      if(autoMode)
+      {
+        state = Matrix_Auto;
+      }
+      else
+      {
+        state = Matrix_Running;
+      }
     }
     break;
 
   case Matrix_Running:
     if(!running)
     {
-      state = Marix_Stop;
+      state = Matrix_Stop;
+    } 
+    else if (autoMode)
+    {
+      state = Matrix_Auto;
+    }
+    break;
+
+  case Matrix_Auto:
+    if(!autoMode)
+    {
+      running = 0;
+      state = Matrix_Stop;
     }
     break;
   
@@ -371,62 +524,16 @@ int TickMatrix(int state)
 
   switch (state)  // State actions
   {
-    case Marix_Stop:
-
+    case Matrix_Stop:
       break;
 
     case Matrix_Running:
+      SnakeStep();
+      break;
+
+    case Matrix_Auto:
       // Tick snake
-      if(currentDirection == Up){
-        currentPos.row = (currentPos.row + 1) % 8;
-        addSnakeHead(&snakeList, currentPos.col, currentPos.row);
-      }
-      else if (currentDirection == Down)
-      {
-        currentPos.row = (currentPos.row - 1 + 8) % 8;
-        addSnakeHead(&snakeList, currentPos.col, currentPos.row);
-      }
-      else if (currentDirection == Right)
-      {
-        currentPos.col = (currentPos.col + 1) % 8;
-        addSnakeHead(&snakeList, currentPos.col, currentPos.row);
-      }
-      else if (currentDirection == Left)
-      {
-        currentPos.col = (currentPos.col - 1 + 8) % 8;
-        addSnakeHead(&snakeList, currentPos.col, currentPos.row);
-      }
-
-      // Check if snake has eaten food
-      if(comparePositions(&currentPos, &food))
-      {
-        eatSound = 1;
-        score += 1;
-        food = generateFood(&snakeList);
-      } else {
-        removeSnakeTail(&snakeList);
-      }
-
-      // Check if snake has run into itself
-      if(checkCollision(&snakeList, &currentPos))
-      {
-        resetSnake(&snakeList);
-        addSnakeHead(&snakeList, 3, 3);
-        currentPos = {3, 3};
-        food = generateFood(&snakeList);
-        currentDirection = Up;
-        if (score > highscore)
-        {
-          highscore = score;
-        }
-        score = 0;
-        eeprom_update_word((uint16_t *)EEPROM_ADDRESS, highscore);
-        running = 0;
-        gameOver = 1;
-      }
-
-      resetMatrix();
-      renderSnake(&snakeList, &food);
+      querryModel = 1;
       break;
 
     default:
@@ -465,7 +572,11 @@ int Tick_JS(int state)
     break;
 
   case JSWait:
-    if (ct_pressed)
+    if (autoMode)
+    {
+      // Ignore JS input when in auto mode
+    }
+    else if (ct_pressed)
     {
       running = !running;
       state = CenterPressed;
@@ -567,7 +678,7 @@ int Tick_JS(int state)
   return state;
 }
 
-enum LCDStates {LCD_Init, LCD_NewGame, LCD_InGame, LCD_Pause, LCD_GameOver};
+enum LCDStates {LCD_Init, LCD_NewGame, LCD_InGame, LCD_Pause, LCD_GameOver, LCD_AutoMode};
 int TickLCD(int state)
 {
   static int lastScore;
@@ -593,6 +704,14 @@ int TickLCD(int state)
         lcd_write_str("Press JS");
         state = LCD_InGame;
       }
+      else if (autoMode)
+      {
+        lcd_clear();
+        lcd_goto_xy(0, 0);
+        lcd_write_str("Auto Mode");
+        printScoreOnLCD(1);
+        state = LCD_AutoMode;
+      }
       break;
 
     case LCD_InGame:
@@ -612,6 +731,14 @@ int TickLCD(int state)
         printHighscoreOnLCD(1);
         state = LCD_Pause;
       }
+      else if (autoMode)
+      {
+        lcd_clear();
+        lcd_goto_xy(0, 0);
+        lcd_write_str("Auto Mode");
+        printScoreOnLCD(1);
+        state = LCD_AutoMode;
+      }
       break;
 
     case LCD_Pause:
@@ -623,12 +750,39 @@ int TickLCD(int state)
         lcd_write_str("Press JS");
         state = LCD_InGame;
       }
+      else if (autoMode)
+      {
+        lcd_clear();
+        lcd_goto_xy(0, 0);
+        lcd_write_str("Auto Mode");
+        printScoreOnLCD(1);
+        state = LCD_AutoMode;
+      }
       break;
 
     case LCD_GameOver:
       if(running)
       {
         gameOver = 0;
+        state = LCD_InGame;
+      }
+      break;
+      
+    case LCD_AutoMode:
+      if (gameOver)
+      {
+        lcd_clear();
+        lcd_goto_xy(0, 0);
+        lcd_write_str("Game Over");
+        printHighscoreOnLCD(1);
+        state = LCD_GameOver;
+      }
+      else if (!autoMode)
+      {
+        lcd_clear();
+        printScoreOnLCD(0);
+        lcd_goto_xy(1, 0);
+        lcd_write_str("Press JS");
         state = LCD_InGame;
       }
       break;
@@ -661,6 +815,17 @@ int TickLCD(int state)
     break;
 
   case LCD_GameOver:
+    break;
+
+  case LCD_AutoMode:
+    if (lastScore != score)
+    {
+      lastScore = score;
+      lcd_clear();
+      lcd_goto_xy(0, 0);
+      lcd_write_str("Auto Mode");
+      printScoreOnLCD(1);
+    }
     break;
 
   default:
@@ -709,17 +874,17 @@ int Tick_HS(int state)
     break;
 
   case HS_Wait:
-    PORTB = SetBit(PORTD, 0, 0);
+    PORTB = SetBit(PORTB, 0, 0);
     break;
 
   case HS_Pressed:
     if (i % 2)
     {
-      PORTB = SetBit(PORTD, 0, 1);
+      PORTB = SetBit(PORTB, 0, 1);
     }
     else 
     {
-      PORTB = SetBit(PORTD, 0, 0);
+      PORTB = SetBit(PORTB, 0, 0);
     }
     i++;
     break;
@@ -910,6 +1075,193 @@ int TickGameOverSound(int state)
   return state;
 }
 
+enum AutoModeStates {AM_Init, AM_Off, AM_BtnPressedOn, AM_BtnPressedOff, AM_On};
+int TickAutoMode(int state)
+{
+  bool btn_pressed = GetBit(PINC, 4);
+  switch (state)  // State transitions
+  {
+    case AM_Init:
+      autoMode = 0;
+      state = AM_Off;
+      break;
+
+    case AM_BtnPressedOn:
+      if (!btn_pressed)
+      {
+        autoMode = 1;
+        running = 1;
+        state = AM_On;
+      }
+      break;
+
+    case AM_BtnPressedOff:
+      if (!btn_pressed)
+      {
+        autoMode = 0;
+        state = AM_Off;
+      }
+      break;
+
+    case AM_Off:
+      if (btn_pressed)
+      {
+        state = AM_BtnPressedOn;
+      }
+      break;
+
+    case AM_On:
+      if (btn_pressed)
+      {
+        state = AM_BtnPressedOff;
+      }
+      break;
+    
+    default:
+      state = AM_Init;
+      break;
+  }
+
+  switch (state)  // State actions
+  {
+    case AM_Init:
+      autoMode = 0;
+      state = AM_Off;
+      break;
+
+    case AM_BtnPressedOn:
+      break;
+
+    case AM_BtnPressedOff:
+      break;
+
+    case AM_Off:
+      PORTB = SetBit(PORTB, 4, 0);
+      break;
+
+    case AM_On:
+      PORTB = SetBit(PORTB, 4, 1);
+      break;
+
+    default:
+      state = AM_Init;
+      break;
+  }
+
+  return state;
+}
+
+enum QuerryModelStates
+{
+  QM_Init,
+  QM_Wait,
+  QM_Querry,
+  QM_Receive
+};
+
+int TickQuerryModel(int state)
+{
+  static unsigned char grid[GRIDSIZE][GRIDSIZE];
+  static unsigned char input[65]; // 64 for grid + 1 for direction
+  static char result[20];          // Buffer to store the result from the model
+  static int index = 0;
+  static bool doneReceiving = false;
+
+  switch (state) // State transitions
+  {
+  case QM_Init:
+    state = QM_Wait;
+    break;
+
+  case QM_Wait:
+    if (querryModel)
+    {
+      querryModel = 0;
+      state = QM_Querry;
+    }
+    break;
+
+  case QM_Querry:
+    doneReceiving = false;
+    state = QM_Receive;
+    break;
+
+  case QM_Receive:
+    if (doneReceiving)
+    {
+      state = QM_Wait;
+    }
+    break;
+
+  default:
+    state = QM_Init;
+    break;
+  }
+
+  switch (state) // State actions
+  {
+  case QM_Init:
+    state = QM_Wait;
+    break;
+
+  case QM_Wait:
+    break;
+
+  case QM_Querry:
+    // Generate the current game state grid
+    renderSnakeToGrid(grid, &snakeList, &food);
+
+    // Prepare the input for the model
+    prepareInput(grid, currentDirection, input);
+
+    // Send first Input
+    serial_char(input[0]);
+    //serial_char(','); // Add comma between elements
+    
+    // Send the input to the model via serial
+    for (int i = 1; i < 65; i++)
+    {
+      //serial_char(','); // Add comma between elements
+      serial_char(input[i]);
+    }
+    serial_char('\n'); // End of input signal
+    break;
+
+  case QM_Receive:
+    // Wait for the model's response
+    while (UCSR0A & (1 << RXC0))
+    {
+      char received = UDR0;
+      if (received == '\n')
+      {
+        result[index] = '\0';
+        index = 0;
+        doneReceiving = true;
+        break;
+      }
+      else
+      {
+        result[index++] = received;
+      }
+    }
+
+    // Convert the received result to a direction
+    if (doneReceiving)
+    {
+      int predictedAction = atoi(result); // AASCII to Integer
+      currentDirection = (direction)getDirectionFromAction(predictedAction);
+      SnakeStep(); // Move the snake based on the new direction
+    }
+    break;
+
+  default:
+    state = QM_Init;
+    break;
+  }
+
+  return state;
+}
+
 void hardwareInit()
 {
   // OUTPUT (DDR) => 1
@@ -972,7 +1324,9 @@ int main(void)
   renderSnake(&snakeList, &food);
   buzzerInUse = 0;
   freqency = 0;
-
+  autoMode = 0;
+  querryModel = 0;
+  predictedDirection = Up;
 
   // Tasks init
   tasks[0].state = Matrix_Init;
@@ -1009,6 +1363,16 @@ int main(void)
   tasks[6].elapsedTime = 0;
   tasks[6].period = TASK6_PERIOD;
   tasks[6].TickFct = &TickGameOverSound;
+
+  tasks[7].state = AM_Init;
+  tasks[7].elapsedTime = 0;
+  tasks[7].period = GCD_PERIOD;
+  tasks[7].TickFct = &TickAutoMode;
+
+  tasks[8].state = QM_Init;
+  tasks[8].elapsedTime = 0;
+  tasks[8].period = GCD_PERIOD;
+  tasks[8].TickFct = &TickQuerryModel;
 
   TimerSet(GCD_PERIOD);
   TimerOn();
