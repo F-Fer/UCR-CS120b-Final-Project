@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../../../../.."
+		},
+		{
+			"name": "Custom_Lab",
+			"path": "../.."
+		}
+	],
+	"settings": {}
+}
