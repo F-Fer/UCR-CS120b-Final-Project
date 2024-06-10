@@ -5,8 +5,8 @@
  * I acknowledge all content contained herein, excluding
  * template or example code, is my own original work.
  *
- * DemoLink: https://youtu.be/PIpjYblfRpQ
-*/
+ * DemoLink: https://youtu.be/qagf-ed95OY
+ */
 
 #include <stdlib.h> 
 #include <stddef.h> 
@@ -21,6 +21,7 @@
 
 #define NUM_TASKS 9
 #define EEPROM_ADDRESS 0
+
 // Value representations for sending the snakes state via serial
 #define EMPTY 0
 #define SNAKE_BODY 1
@@ -38,18 +39,18 @@ typedef struct _task
 } task;
 
 // Periods
-const unsigned long GCD_PERIOD = 25;    // GCD of all tasks
-const unsigned int TASK0_PERIOD = 500;  // Matrix task
-const unsigned int TASK1_PERIOD = 25;   // Joystick input task
-const unsigned int TASK2_PERIOD = 100;  // LCD display task
-const unsigned int TASK3_PERIOD = 200;   // Highscore reset button task
-const unsigned int TASK4_PERIOD = 25;  // Buzzer task
-const unsigned int TASK5_PERIOD = 25;   // Eat sound task
-const unsigned int TASK6_PERIOD = 25;   // Game-Over Sound task
-const unsigned int TASK7_PERIOD = 100;   // Auto Mode Button
-const unsigned int TASK8_PERIOD = 300;   // Querry model task
+const unsigned long GCD_PERIOD = 25;      // GCD of all tasks
+const unsigned int TASK0_PERIOD = 500;    // Matrix task
+const unsigned int TASK1_PERIOD = 25;     // Joystick input task
+const unsigned int TASK2_PERIOD = 100;    // LCD display task
+const unsigned int TASK3_PERIOD = 200;    // Highscore reset button task
+const unsigned int TASK4_PERIOD = 25;     // Buzzer task
+const unsigned int TASK5_PERIOD = 25;     // Eat sound task
+const unsigned int TASK6_PERIOD = 25;     // Game-Over Sound task
+const unsigned int TASK7_PERIOD = 100;    // Auto Mode Button
+const unsigned int TASK8_PERIOD = 300;    // Querry model task
 
-task tasks[NUM_TASKS]; // declared task array with 5 tasks
+task tasks[NUM_TASKS]; // declared task array
 
 void TimerISR()
 {
@@ -64,6 +65,8 @@ void TimerISR()
   }
 }
 
+// List structure to save the snakes state
+//--------------------------------------------------------------------------------------------------------------------------
 
 // The snakes elements consist of a stuct, that saves their x (row) and y (col) positions.
 // These positions are kept in a dynamic list
@@ -137,8 +140,9 @@ int listLen(struct List *snakeList)
   return count;
 }
 
-
 // Global variables
+//--------------------------------------------------------------------------------------------------------------------------
+
 struct List snakeList = {NULL, NULL}; // Initialize snakeList
 enum direction {Up, Right, Down, Left} currentDirection; 
 struct SnakeElement currentPos;
@@ -154,8 +158,9 @@ bool autoMode;
 bool querryModel;
 enum direction predictedDirection;
 
+// Functions to render snake to led matrix
+//--------------------------------------------------------------------------------------------------------------------------
 
-// Helper Functions
 void resetMatrix()
 {
   for (int i = 1; i < 9; i++){
@@ -241,6 +246,9 @@ void resetSnake(struct List *snakeList)
   }
 }
 
+// Other helper functions
+//--------------------------------------------------------------------------------------------------------------------------
+
 void num_to_str(unsigned char number, char *str)
 {
   int i = 0;
@@ -293,6 +301,9 @@ void printScoreOnLCD(unsigned char row)
   lcd_write_str(str);
 }
 
+// Functions for passive buzzer
+//--------------------------------------------------------------------------------------------------------------------------
+
 void setPrescaler(unsigned char ps)
 {
   // Clear the existing prescaler bits
@@ -344,6 +355,9 @@ void buzzer_off()
   // Turn off the buzzer by disabling the Timer1 clock
   TCCR1B &= ~((1 << CS12) | (1 << CS11) | (1 << CS10)); 
 }
+
+// Functions to prepare the snakes state for transfer via serial
+//--------------------------------------------------------------------------------------------------------------------------
 
 void renderSnakeToGrid(unsigned char grid[GRIDSIZE][GRIDSIZE], List *snake, SnakeElement *food)
 {
@@ -410,6 +424,9 @@ direction getDirectionFromAction(unsigned char action)
   }
 }
 
+// SnakeStep function. Renders snake to 8x8 grid on arduino
+//--------------------------------------------------------------------------------------------------------------------------
+
 void SnakeStep()
 {
   // Tick snake
@@ -469,6 +486,9 @@ void SnakeStep()
   resetMatrix();
   renderSnake(&snakeList, &food);
 }
+
+// Task controlling the led-matrix
+//--------------------------------------------------------------------------------------------------------------------------
 
 enum MatrixStates
 {
@@ -545,7 +565,9 @@ int TickMatrix(int state)
   return state;
 }
 
-// Joystick Task
+// Task, polling the joystick
+//--------------------------------------------------------------------------------------------------------------------------
+
 enum JSStates
 {
   JSInit,
@@ -679,15 +701,28 @@ int Tick_JS(int state)
   return state;
 }
 
-enum LCDStates {LCD_Init, LCD_NewGame, LCD_InGame, LCD_Pause, LCD_GameOver, LCD_AutoMode};
+// Task, controlling the LCD display
+//--------------------------------------------------------------------------------------------------------------------------
+
+enum LCDStates
+{
+  LCD_Init,
+  LCD_NewGame,
+  LCD_InGame,
+  LCD_Pause,
+  LCD_GameOver,
+  LCD_AutoMode
+};
 int TickLCD(int state)
 {
   static int lastScore;
+  static int lastHighscore;
 
   switch (state)  // State transitions
   {
     case LCD_Init:
       lastScore = score;
+      lastHighscore = highscore;
       lcd_clear();
       lcd_goto_xy(0, 0);
       lcd_write_str("New Game");
@@ -799,6 +834,14 @@ int TickLCD(int state)
     break;
 
   case LCD_NewGame:
+    if(lastHighscore != highscore)
+    {
+      lastHighscore = highscore;
+      lcd_clear();
+      lcd_goto_xy(0, 0);
+      lcd_write_str("New Game");
+      printHighscoreOnLCD(1);
+    }
     break;
 
   case LCD_InGame:
@@ -813,9 +856,25 @@ int TickLCD(int state)
     break;
 
   case LCD_Pause:
+    if (lastHighscore != highscore)
+    {
+      lastHighscore = highscore;
+      lcd_clear();
+      lcd_goto_xy(0, 0);
+      lcd_write_str("Game Paused");
+      printHighscoreOnLCD(1);
+    }
     break;
 
   case LCD_GameOver:
+    if (lastHighscore != highscore)
+    {
+      lastHighscore = highscore;
+      lcd_clear();
+      lcd_goto_xy(0, 0);
+      lcd_write_str("Game Over");
+      printHighscoreOnLCD(1);
+    }
     break;
 
   case LCD_AutoMode:
@@ -835,7 +894,15 @@ int TickLCD(int state)
   return state;
 }
 
-enum HSResetStates {HS_Init, HS_Wait, HS_Pressed};
+// Task, polling the highscore-reset button
+//--------------------------------------------------------------------------------------------------------------------------
+
+enum HSResetStates
+{
+  HS_Init,
+  HS_Wait,
+  HS_Pressed
+};
 int Tick_HS(int state)
 {
   static int i;
@@ -898,6 +965,9 @@ int Tick_HS(int state)
   return state;
 }
 
+// Task, controlling the buzzer directly
+//--------------------------------------------------------------------------------------------------------------------------
+
 enum BuzzerStates{Buzzer_Init, Buzzer_Wait};
 int TickBuzzer(int state)
 {
@@ -934,7 +1004,15 @@ int TickBuzzer(int state)
   return state;
 }
 
-enum EatSoundStates {EatSound_Init, EatSound_Off, EatSound_On};
+// Task, resposible for the eating sound of the snake
+//--------------------------------------------------------------------------------------------------------------------------
+
+enum EatSoundStates
+{
+  EatSound_Init,
+  EatSound_Off,
+  EatSound_On
+};
 int TickEatSound(int state)
 {
   static int i;
@@ -988,7 +1066,17 @@ int TickEatSound(int state)
   return state;
 }
 
-enum GameOverSoundStates {GOSound_Init, GOSound_Off, GOSound1, GOSound2, GOSound3};
+// Task, resposible for the game-over sound of the snake
+//--------------------------------------------------------------------------------------------------------------------------
+
+enum GameOverSoundStates
+{
+  GOSound_Init,
+  GOSound_Off,
+  GOSound1,
+  GOSound2,
+  GOSound3
+};
 int TickGameOverSound(int state)
 {
   static int i;
@@ -1076,7 +1164,17 @@ int TickGameOverSound(int state)
   return state;
 }
 
-enum AutoModeStates {AM_Init, AM_Off, AM_BtnPressedOn, AM_BtnPressedOff, AM_On};
+// Task, controlling the snake in auto-mode
+//--------------------------------------------------------------------------------------------------------------------------
+
+enum AutoModeStates
+{
+  AM_Init,
+  AM_Off,
+  AM_BtnPressedOn,
+  AM_BtnPressedOff,
+  AM_On
+};
 int TickAutoMode(int state)
 {
   bool btn_pressed = GetBit(PINC, 4);
@@ -1152,30 +1250,26 @@ int TickAutoMode(int state)
   return state;
 }
 
-enum QuerryModelStates
+// Task, querying the model in auto-mode
+//--------------------------------------------------------------------------------------------------------------------------
+
+enum QueryModelStates
 {
   QM_Init,
   QM_Wait,
   QM_Querry,
   QM_Receive
 };
-
 int TickQuerryModel(int state)
 {
   static unsigned char grid[GRIDSIZE][GRIDSIZE];
-  static unsigned char input[67]; // 64 for grid + 1 for direction
-  static char result[20];          // Buffer to store the result from the model
-  static int index = 0;
+  static unsigned char input[67];   // 64 for grid + 1 for direction
+  static unsigned char result;      // Buffer to store the result from the model
   static bool doneReceiving = false;
 
   switch (state) // State transitions
   {
   case QM_Init:
-    // Clear the serial buffer
-    while (UCSR0A & (1 << RXC0))
-    {
-      char dummy = UDR0;
-    }
     serial_char('\n');
     state = QM_Wait;
     break;
@@ -1233,27 +1327,21 @@ int TickQuerryModel(int state)
     // Wait for the model's response
     while (UCSR0A & (1 << RXC0))
     {
-      char received = UDR0;
+      unsigned char received = UDR0;
       if (received == '\n')
       {
-        result[index] = '\0';
-        index = 0;
         doneReceiving = true;
-        break;
       }
       else
       {
-        result[index++] = received;
+        result = received - 48;
       }
     }
 
     // Convert the received result to a direction
     if (doneReceiving)
     {
-
-      //int predictedAction = atoi(result); // AASCII to Integer
-      unsigned char predictedAction = result[0] - 48; // 0, 1, or 2
-      currentDirection = (direction)getDirectionFromAction(predictedAction);
+      currentDirection = (direction)getDirectionFromAction(result);
       SnakeStep(); // Move the snake based on the new direction
     }
     break;
@@ -1265,6 +1353,9 @@ int TickQuerryModel(int state)
 
   return state;
 }
+
+// Hardware initialization
+//--------------------------------------------------------------------------------------------------------------------------
 
 void hardwareInit()
 {

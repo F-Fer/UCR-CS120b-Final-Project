@@ -76,7 +76,7 @@ class SnakeGame(gym.Env):
 
 
     def step(self, action):
-        print(f"Stepnum: {self.stepnum}")
+        # print(f"Stepnum: {self.stepnum}")
         self.stepnum += 1
 
         # Update snake_direction based on action
@@ -85,7 +85,7 @@ class SnakeGame(gym.Env):
         elif action == self.TURN_LEFT:
             self.snake_direction = (self.snake_direction - 1) % 4
 
-        print(f"Direction: {self.snake_direction}")
+        # print(f"Direction: {self.snake_direction}")
 
         # Get new head coordinates based on the current direction
         head_x, head_y = self.snake_coordinates[-1]
@@ -124,9 +124,9 @@ class SnakeGame(gym.Env):
                     self.food = (np.random.randint(self.grid_size), np.random.randint(self.grid_size))
                 self.grid[self.food] = self.FOOD
                 self.last_food_step = self.stepnum
-            print(f"Food: {self.food}")
-            print(f"Reward: {reward}")
-            print(f"Coodrdinates: {self.snake_coordinates}")
+            # print(f"Food: {self.food}")
+            # print(f"Reward: {reward}")
+            # print(f"Coodrdinates: {self.snake_coordinates}")
             return  self.get_state(), reward, done, False, {}
         
         # Snake has not hitten food
