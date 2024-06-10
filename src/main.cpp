@@ -47,7 +47,7 @@ const unsigned int TASK4_PERIOD = 25;  // Buzzer task
 const unsigned int TASK5_PERIOD = 25;   // Eat sound task
 const unsigned int TASK6_PERIOD = 25;   // Game-Over Sound task
 const unsigned int TASK7_PERIOD = 100;   // Auto Mode Button
-const unsigned int TASK8_PERIOD = 250;   // Game-Over Sound task
+const unsigned int TASK8_PERIOD = 300;   // Querry model task
 
 task tasks[NUM_TASKS]; // declared task array with 5 tasks
 
@@ -373,7 +373,7 @@ void renderSnakeToGrid(unsigned char grid[GRIDSIZE][GRIDSIZE], List *snake, Snak
   return;
 }
 
-void prepareInput(unsigned char grid[GRIDSIZE][GRIDSIZE], int direction, unsigned char *input) // Input needs to be of size 65 (8 * 8 + 1) for the direction
+void prepareInput(unsigned char grid[GRIDSIZE][GRIDSIZE], int direction, SnakeElement position, unsigned char *input) // Input needs to be of size 65 (8 * 8 + 1) for the direction
 {
   // Flatten the 8x8 grid into the input array
   int index = 0;
@@ -385,10 +385,12 @@ void prepareInput(unsigned char grid[GRIDSIZE][GRIDSIZE], int direction, unsigne
     }
   }
   // Add the direction to the input array
-  input[index] = (float)direction;
+  input[index++] = (float)direction;
+  input[index++] = (float)position.row;
+  input[index++] = (float)position.col;
 }
 
-unsigned char getDirectionFromAction(unsigned char action)
+direction getDirectionFromAction(unsigned char action)
 {
   switch (action)
   {
@@ -396,10 +398,10 @@ unsigned char getDirectionFromAction(unsigned char action)
       return currentDirection;
 
     case 0:
-      return (direction)((currentDirection + 1) % 4);
+      return (direction)((currentDirection - 1) % 4);
 
     case 2:
-      return (direction)((currentDirection - 1) % 4);
+      return (direction)((currentDirection + 1) % 4);
 
     default:
       // Undefinded action
@@ -532,7 +534,6 @@ int TickMatrix(int state)
       break;
 
     case Matrix_Auto:
-      // Tick snake
       querryModel = 1;
       break;
 
@@ -1162,7 +1163,7 @@ enum QuerryModelStates
 int TickQuerryModel(int state)
 {
   static unsigned char grid[GRIDSIZE][GRIDSIZE];
-  static unsigned char input[65]; // 64 for grid + 1 for direction
+  static unsigned char input[67]; // 64 for grid + 1 for direction
   static char result[20];          // Buffer to store the result from the model
   static int index = 0;
   static bool doneReceiving = false;
@@ -1170,6 +1171,12 @@ int TickQuerryModel(int state)
   switch (state) // State transitions
   {
   case QM_Init:
+    // Clear the serial buffer
+    while (UCSR0A & (1 << RXC0))
+    {
+      char dummy = UDR0;
+    }
+    serial_char('\n');
     state = QM_Wait;
     break;
 
@@ -1212,16 +1219,11 @@ int TickQuerryModel(int state)
     renderSnakeToGrid(grid, &snakeList, &food);
 
     // Prepare the input for the model
-    prepareInput(grid, currentDirection, input);
+    prepareInput(grid, currentDirection, currentPos, input);
 
-    // Send first Input
-    serial_char(input[0]);
-    //serial_char(','); // Add comma between elements
-    
     // Send the input to the model via serial
-    for (int i = 1; i < 65; i++)
+    for (int i = 0; i < 67; i++)
     {
-      //serial_char(','); // Add comma between elements
       serial_char(input[i]);
     }
     serial_char('\n'); // End of input signal
@@ -1248,7 +1250,9 @@ int TickQuerryModel(int state)
     // Convert the received result to a direction
     if (doneReceiving)
     {
-      int predictedAction = atoi(result); // AASCII to Integer
+
+      //int predictedAction = atoi(result); // AASCII to Integer
+      unsigned char predictedAction = result[0] - 48; // 0, 1, or 2
       currentDirection = (direction)getDirectionFromAction(predictedAction);
       SnakeStep(); // Move the snake based on the new direction
     }
@@ -1366,12 +1370,12 @@ int main(void)
 
   tasks[7].state = AM_Init;
   tasks[7].elapsedTime = 0;
-  tasks[7].period = GCD_PERIOD;
+  tasks[7].period = TASK7_PERIOD;
   tasks[7].TickFct = &TickAutoMode;
 
   tasks[8].state = QM_Init;
   tasks[8].elapsedTime = 0;
-  tasks[8].period = GCD_PERIOD;
+  tasks[8].period = TASK8_PERIOD;
   tasks[8].TickFct = &TickQuerryModel;
 
   TimerSet(GCD_PERIOD);

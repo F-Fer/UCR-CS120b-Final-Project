@@ -1,96 +1,119 @@
-import tensorflow as tf
+import torch
 import serial
 import time
 import numpy as np
-from QModel import QModel, create_q_model
-
-"""
-model_path = "/Users/finnferchau/Desktop/Hochschule/Sem-4/ES/Lab/CustomLab/Custom_Lab/UCR-CS120b-Final-Project/models/snake_dqn_model.tflite"
-
-# Load the TensorFlow Lite model
-interpreter = tf.lite.Interpreter(model_path=model_path)
-interpreter.allocate_tensors()
-
-# Get input and output tensors
-input_details = interpreter.get_input_details()
-output_details = interpreter.get_output_details()
-"""
+from stable_baselines3 import PPO
+import matplotlib.pyplot as plt
 
 # Load the model
-model_path = '/Users/finnferchau/Desktop/Hochschule/Sem-4/ES/Lab/CustomLab/Custom_Lab/UCR-CS120b-Final-Project/models/snake_dqn_model.keras'  # Replace with the correct path
+model_path = '/Users/finnferchau/Desktop/Hochschule/Sem-4/ES/Lab/CustomLab/Custom_Lab/UCR-CS120b-Final-Project/models/model.zip'
 
-# Create the QModel with the correct parameters
-model = create_q_model(grid_size=8, num_actions=3)
-
-# Now you can try loading the weights
+# Load the PyTorch model
 try:
-  model.load_weights(model_path)
-  print("Model loaded successfully.")
+    model = PPO.load(model_path)
+    print("Model loaded successfully.")
 except Exception as e:
-  print(f"Error loading model: {e}")
+    print(f"Error loading model: {e}")
+    quit()
 
-# Prepare input data
-def prepare_input(grid, direction):
-    grid = np.array(grid).reshape((1, 8, 8, 1))  # Reshape grid to match model input shape
-    direction = np.array([direction]).reshape((1, 1))  # Ensure direction is in the correct shape
-    return [grid, direction]
+def snake_plot(grid, plot_inline=False):
+    # Value interpretations for grid array
+    EMPTY = 0
+    SNAKE_BODY = 1
+    SNAKE_HEAD = 2
+    FOOD = 3 
 
-# Example grid and direction
-example_grid = np.zeros(64)  # Replace with your actual grid data
-example_direction = 2  # Replace with your actual direction data
+    snake_ind = (grid == SNAKE_BODY)
+    food_ind = (grid == FOOD)
+    head_ind = (grid == SNAKE_HEAD)
 
-# Prepare the input
-inputs = prepare_input(example_grid, example_direction)
+    # Create color array for plot, default white color
+    color_array = np.zeros((8, 8, 3), dtype=np.uint8) + 255
+    color_array[snake_ind, :] = np.array([0, 255, 0]) # Blue snake
+    color_array[food_ind, :] = np.array([255, 0, 0])  # Green food
+    color_array[head_ind, :] = np.array([0, 0, 255])  # Red snakehead
 
-# Make predictions
-predictions = model.predict(inputs)
-print(predictions)
+    # Plot the rendered image
+    plt.imshow(color_array)
+    plt.gca().invert_yaxis()  # Invert the y-axis
+    plt.gca().xaxis.set_ticks_position('bottom')  # Set x-axis ticks to the bottom
+    plt.gca().yaxis.set_ticks_position('left')    # Set y-axis ticks to the left
+    plt.show(block=False)
+    plt.pause(0.1)  # Pause to allow the plot to update
+    plt.clf()  # Clear the figure to update the plot in the next iteration
 
-# Set up serial communication
-ser = serial.Serial('/dev/tty.usbmodem21101', 9600)
-time.sleep(2)  # Wait for the serial connection to initialize
+
+def prepare_input(grid, direction, position):
+    # Prepare the grid
+    grid = grid.reshape((8, 8))  # Reshape grid to match observation space
+
+    # Plot the snake
+    snake_plot(grid)
+
+    grid = grid.reshape((1, 8, 8))
+
+    # Convert to tensors
+    grid_tensor = torch.tensor(grid, dtype=torch.uint8)
+    direction_tensor = torch.tensor([direction], dtype=torch.int32).unsqueeze(0)
+    position_tensor = torch.tensor(position, dtype=torch.int32).unsqueeze(0)
+
+    # Return a dictionary matching the observation space
+    return {
+        'grid': grid_tensor,
+        'direction': direction_tensor,
+        'position': position_tensor
+    }
 
 def get_inference(data):
-    # Check if the length of the data is correct
-    if len(data) != 65:
-        print("Received data has incorrect number of bytes.")
-        return None
-
     # Convert byte data to list of integers
     input_data = [int(byte) for byte in data]
-    print(f"Int data: {input_data}")
     
     # Extract grid and direction from input_data
     grid = np.array(input_data[:64])
-    grid[grid == 3] = 4 # Error inside game env
-    grid = grid / 3.0   # Scale grid
-    grid = grid.reshape((1, 8, 8, 1))  # First 64 elements
     direction = np.array([input_data[64]])
-    direction = direction / 3.0 # Scale direction
-    direction = direction.reshape((1, 1))  # Last element
+    position = input_data[65:67]
+
+    print(f"Direction: {direction}")
+    print(f"Position: {position}")
 
     # Prepare the inputs
-    inputs = [grid, direction]
+    state = prepare_input(grid, direction, position)
     
     # Run the model
-    output_data = model.predict(inputs)
-    return output_data[0]
+    with torch.no_grad():
+        action, _states = model.predict(state)
+        print(action)
+    return action
 
-
-
+# Set up serial communication
+try:
+    ser = serial.Serial('/dev/tty.usbmodem21101', 9600)
+    ser.reset_input_buffer()
+    print(f"Connected to Serial")
+except Exception as e:
+    print("Could not connect to serial:")
+    print(e)
+    quit()
+time.sleep(2)  # Wait for the serial connection to initialize
+ser.readline().strip()
 
 while True:
-        if ser.in_waiting > 0:
-            # Read the incoming data from Arduino
-            data = ser.readline().strip()
-            print(f"Received data: {data}")
-            
-            # Get the inference from the model
-            result = get_inference(data)
-            
-            # Extract the action with the highest value
-            predicted_action = np.argmax(result)
-            
-            # Send the result back to Arduino
-            ser.write(f"{result}\n".encode('utf-8'))
-            print(f"Sent result: {predicted_action}")
+    if ser.in_waiting > 0:
+        # Read the incoming data from Arduino
+        data = ser.readline().strip()
+        print(f"Received data: {data}")
+
+        # Check if the length of the data is correct
+        if len(data) != 67:
+            print(f"Received data has incorrect number of bytes. Length: {len(data)}")
+            continue
+        
+        # Get the inference from the model
+        predicted_action = get_inference(data)[0]
+        print(f"Action: {predicted_action}")
+        # Extract the action with the highest value
+        # predicted_action = np.argmax(result)
+        
+        # Send the result back to Arduino
+        ser.write(f"{predicted_action}\n".encode("utf-8"))
+        print(f"Sent result: {predicted_action}")

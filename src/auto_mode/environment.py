@@ -3,15 +3,10 @@ from gymnasium import spaces
 import gymnasium as gym
 import matplotlib.pyplot as plt
 
-import numpy as np
-from gymnasium import spaces
-import gymnasium as gym
-import matplotlib.pyplot as plt
-
 class SnakeGame(gym.Env):
 
     metadate = {"render.modes": ["console", "rgb_array"]}
-    n_actions = 4
+    n_actions = 3 # Wrong, should be 3
 
     # Directions
     UP = 0
@@ -81,21 +76,23 @@ class SnakeGame(gym.Env):
 
 
     def step(self, action):
+        print(f"Stepnum: {self.stepnum}")
         self.stepnum += 1
 
         # Update snake_direction based on action
         if action == self.TURN_RIGHT:
             self.snake_direction = (self.snake_direction + 1) % 4
-            pass
         elif action == self.TURN_LEFT:
             self.snake_direction = (self.snake_direction - 1) % 4
+
+        print(f"Direction: {self.snake_direction}")
 
         # Get new head coordinates based on the current direction
         head_x, head_y = self.snake_coordinates[-1]
         if self.snake_direction == self.UP:
-            head_x = (head_x - 1) % self.grid_size
-        elif self.snake_direction == self.DOWN:
             head_x = (head_x + 1) % self.grid_size
+        elif self.snake_direction == self.DOWN:
+            head_x = (head_x - 1) % self.grid_size
         elif self.snake_direction == self.LEFT:
             head_y = (head_y - 1) % self.grid_size
         elif self.snake_direction == self.RIGHT:
@@ -113,11 +110,11 @@ class SnakeGame(gym.Env):
         # Check if the snake has found food
         if new_head == self.food:
             reward = self.REWARD_PER_FOOD
+            self.grid[self.snake_coordinates[-1]] = self.SNAKE_BODY # Old head to snake body
             self.snake_coordinates.append(new_head)
-            self.grid[self.snake_coordinates[-2]] = self.SNAKE_BODY
             self.grid[new_head] = self.SNAKE_HEAD
 
-            # Check if snake takes up the entige screen
+            # Check if snake takes up the entire screen
             if len(self.snake_coordinates) == (self.grid_size * self.grid_size):
                 done = True
             else:
@@ -127,23 +124,30 @@ class SnakeGame(gym.Env):
                     self.food = (np.random.randint(self.grid_size), np.random.randint(self.grid_size))
                 self.grid[self.food] = self.FOOD
                 self.last_food_step = self.stepnum
-        else:
-            dist_to_food_prev = self.dist_to_food
-            self.dist_to_food = self.grid_distance(self.snake_coordinates[-1], self.food)
-            if dist_to_food_prev > self.dist_to_food:
-              reward += self.REWARD_STEP_TOWARDS_FOOD #reward for getting closer to food
-            elif dist_to_food_prev < self.dist_to_food:
-              reward -= self.REWARD_STEP_TOWARDS_FOOD #penalty for getting further
-            if ((self.stepnum - self.last_food_step) > self.MAX_STEPS_AFTER_FOOD):
-              done = True
-            self.stepnum += 1
-            self.snake_coordinates.append(new_head)
-            self.grid[new_head] = self.SNAKE_HEAD
-            tail = self.snake_coordinates.pop(0)
-            self.grid[tail] = self.EMPTY
+            print(f"Food: {self.food}")
+            print(f"Reward: {reward}")
+            print(f"Coodrdinates: {self.snake_coordinates}")
+            return  self.get_state(), reward, done, False, {}
+        
+        # Snake has not hitten food
+        dist_to_food_prev = self.dist_to_food
+        self.dist_to_food = self.grid_distance(self.snake_coordinates[-1], self.food)
+        if dist_to_food_prev > self.dist_to_food:
+            reward += self.REWARD_STEP_TOWARDS_FOOD # Reward for getting closer to food
+        elif dist_to_food_prev < self.dist_to_food:
+            reward -= self.REWARD_STEP_TOWARDS_FOOD # Penalty for getting away from food
 
-            if len(self.snake_coordinates) > 1:
-              self.grid[self.snake_coordinates[-2]] = self.SNAKE_BODY
+        # Check if max steps afer food has been reached
+        if ((self.stepnum - self.last_food_step) > self.MAX_STEPS_AFTER_FOOD):
+            done = True
+        self.snake_coordinates.append(new_head)
+        self.grid[new_head] = self.SNAKE_HEAD
+        tail = self.snake_coordinates.pop(0)
+        self.grid[tail] = self.EMPTY
+
+        # Turn old head into snake body
+        if len(self.snake_coordinates) > 1:
+            self.grid[self.snake_coordinates[-2]] = self.SNAKE_BODY
 
         # obs, reward, terminated, truncated, info
         return  self.get_state(), reward, done, False, {}
