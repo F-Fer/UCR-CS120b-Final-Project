@@ -67,7 +67,7 @@ The Python script (`inference.py`) runs a reinforcement learning model to provid
 
 ## Training the Model
 
-The model is trained using the **Proximal Policy Optimization (PPO)** strategy. The OpenAI-Gym environment, defined in `environment.py`, is a faithful simulation of the game running on the Arduino. For training the model, the **stable-baselines3** implementation of PPO was utilized. Detailed information and the training process can be found in `model.ipynb`.
+The model is trained using the **Proximal Policy Optimisation (PPO)** strategy. The OpenAI-Gym environment, defined in `environment.py`, is a faithful simulation of the game running on the Arduino. For training the model, the **stable-baselines3** implementation of PPO was utilized. Detailed information and the training process can be found in `model.ipynb`.
 
 ### Key Points:
 - **Algorithm**: Proximal Policy Optimization (PPO)
